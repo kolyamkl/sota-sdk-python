@@ -78,7 +78,7 @@ def _register_agent(name: str, dest: str):
     password = click.prompt("  Password", hide_input=True)
 
     # Prompt for capabilities
-    click.echo("  Available capabilities: web-scraping, data-extraction, code-review, text-generation, research")
+    click.echo("  Available capabilities: web-scraping, data-extraction, code-review")
     caps_input = click.prompt("  Capabilities (comma-separated)")
     capabilities = [c.strip() for c in caps_input.split(",") if c.strip()]
 
