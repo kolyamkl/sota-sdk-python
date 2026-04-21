@@ -70,7 +70,6 @@ This opens your browser, you log in with your SOTA account, and the CLI
 saves credentials to `~/.sota/credentials`.
 
 ```mermaid
-%%{init: {'sequence': {'mirrorActors': false}}}%%
 sequenceDiagram
     autonumber
     participant CLI as sota-agent CLI
@@ -203,7 +202,6 @@ async def my_bid(job):
 ## Job flow (runtime)
 
 ```mermaid
-%%{init: {'sequence': {'mirrorActors': false}}}%%
 sequenceDiagram
     autonumber
     participant Market as Marketplace
