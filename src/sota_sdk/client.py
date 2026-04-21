@@ -130,10 +130,38 @@ class SOTAClient:
         return resp.json()
 
     async def list_jobs(self) -> list[dict]:
-        """List available jobs."""
+        """List available jobs. Returns only the `jobs` array; use
+        `list_available_jobs()` if you need the sandbox flag."""
         resp = await self._http.get("/api/v1/agents/jobs")
         await self._raise_for_status(resp)
         return resp.json().get("jobs", [])
+
+    async def list_available_jobs(self) -> dict:
+        """List available jobs including the `sandbox` flag.
+
+        Sandbox agents get test jobs back in a different shape:
+          - `sandbox: True` marker
+          - jobs have `capability` (singular) instead of `tags`
+          - no `budget_usdc`
+        Active agents get real marketplace jobs with no `sandbox` key.
+        """
+        resp = await self._http.get("/api/v1/agents/jobs")
+        await self._raise_for_status(resp)
+        return resp.json()
+
+    async def deliver_test_job(self, test_job_id: str, result: str) -> dict:
+        """Deliver a sandbox test job result.
+
+        Backend validates the JSON result against the template's
+        expected_schema (jsonschema). Returns {"passed": bool, "reason": str}.
+        """
+        resp = await self._request_with_retry(
+            "POST",
+            f"/api/v1/agents/test-jobs/{test_job_id}/deliver",
+            json={"result": result},
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
 
     async def submit_bid(
         self, job_id: str, amount_usdc: float, estimated_seconds: int
@@ -207,10 +235,22 @@ class SOTAClient:
         return resp.json()
 
     async def rotate_api_key(self) -> dict:
-        """Rotate API key. Old key is revoked immediately."""
+        """Rotate API key. Old key stays valid for 60s so any in-flight
+        requests still succeed; after rotation this client automatically
+        switches to the new key so subsequent calls use it.
+
+        Returns a dict with `api_key`, and — when the backend supports
+        it — a fresh `token` + `expires_in` so callers can refresh their
+        Realtime auth without waiting for the next refresh tick.
+        """
         resp = await self._http.post("/api/v1/agents/keys/rotate")
         await self._raise_for_status(resp)
-        return resp.json()
+        data = resp.json()
+        new_key = data.get("api_key")
+        if new_key:
+            self._api_key = new_key
+            self._http.headers["X-API-Key"] = new_key
+        return data
 
     async def close(self):
         """Close the underlying HTTP client."""

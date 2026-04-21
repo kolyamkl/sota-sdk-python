@@ -2,7 +2,7 @@
 from .agent import SOTAAgent
 from .client import SOTAClient, APIError, verify_webhook_signature
 from .errors import AgentError, ErrorCode
-from .models import AutoBidConfig, Bid, Job, JobContext, WebhookEvent
+from .models import AutoBidConfig, Bid, Job, JobContext, TestJobContext, WebhookEvent
 
 __version__ = "0.1.0"
 
@@ -15,6 +15,7 @@ __all__ = [
     "Job",
     "Bid",
     "JobContext",
+    "TestJobContext",
     "AutoBidConfig",
     "WebhookEvent",
     "verify_webhook_signature",

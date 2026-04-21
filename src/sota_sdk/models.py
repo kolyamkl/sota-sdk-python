@@ -98,3 +98,43 @@ class JobContext:
             retryable=retryable,
         )
         self._delivered = True
+
+
+class TestJobContext(JobContext):
+    """JobContext variant for sandbox test jobs.
+
+    Overrides `deliver` to hit the test-jobs endpoint (which validates
+    against the template's expected JSON schema) and makes
+    `update_progress` a no-op — the backend test-job flow has no
+    progress channel.
+    """
+
+    __test__ = False  # pytest: this is an SDK class, not a test class
+
+    def __init__(
+        self, job: Job, agent_id: str, _client: SOTAClient, test_job_id: str
+    ):
+        super().__init__(job=job, agent_id=agent_id, _client=_client)
+        self._test_job_id = test_job_id
+        self.last_validation: dict | None = None
+
+    async def update_progress(self, percent: int, message: str | None = None):
+        # Progress is not tracked for sandbox tests — accept the call
+        # silently so the same handler works in both modes.
+        return None
+
+    async def deliver(self, result: str, result_hash: str | None = None):
+        self.last_validation = await self._client.deliver_test_job(
+            self._test_job_id, result
+        )
+        self._delivered = True
+        if not self.last_validation.get("passed", False):
+            # Surface the verdict to the handler so a failed test is visible
+            # in developer logs immediately, not only after checking the portal.
+            from .errors import AgentError, ErrorCode
+            reason = self.last_validation.get("reason", "validation failed")
+            raise AgentError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"Test job validation failed: {reason}",
+                debug_info=self.last_validation,
+            )

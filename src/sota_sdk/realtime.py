@@ -21,9 +21,18 @@ class RealtimeManager:
         self._channels: dict[str, object] = {}
         self._on_job_callback: Callable | None = None
         self._on_update_callback: Callable | None = None
+        self._on_fatal_callback: Callable[[Exception], None] | None = None
         self._connected = False
         self._capabilities: list[str] = []
         self._reconnect_task: asyncio.Task | None = None
+
+    def set_on_fatal(self, callback: Callable[[Exception], None]):
+        """Register a callback invoked when realtime gives up reconnecting.
+
+        The SDK's agent loop uses this to exit cleanly instead of
+        heartbeating forever while jobs silently stop arriving.
+        """
+        self._on_fatal_callback = callback
 
     async def connect(self, jwt: str):
         """Connect to Supabase Realtime with the provided JWT."""
@@ -73,6 +82,16 @@ class RealtimeManager:
 
         logger.error("All reconnect attempts exhausted — realtime disabled")
         self._connected = False
+        if self._on_fatal_callback:
+            try:
+                self._on_fatal_callback(
+                    RuntimeError(
+                        f"Realtime reconnect exhausted after "
+                        f"{len(RECONNECT_DELAYS)} attempts"
+                    )
+                )
+            except Exception as cb_err:
+                logger.error(f"on_fatal callback raised: {cb_err}")
 
     def _schedule_reconnect(self):
         """Schedule a reconnect if not already in progress."""

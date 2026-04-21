@@ -110,6 +110,18 @@ def _register_agent(name: str, dest: str):
 
         data = resp.json()
 
+        # Fetch Supabase + API URLs from the backend's public config so the
+        # scaffolded .env is ready to run (no "what URL goes here?" step).
+        # Best-effort: if the config endpoint fails, we still write the
+        # agent-specific values and tell the dev to fill the rest in.
+        dev_cfg: dict = {}
+        try:
+            cfg_resp = httpx.get(f"{api_url}/api/v1/developer/config", timeout=10)
+            if cfg_resp.status_code == 200:
+                dev_cfg = cfg_resp.json()
+        except httpx.RequestError:
+            pass
+
         # Write credentials to .env in scaffolded project
         env_path = os.path.join(dest, ".env")
         with open(env_path, "w") as f:
@@ -117,6 +129,10 @@ def _register_agent(name: str, dest: str):
             f.write(f'SOTA_WEBHOOK_SECRET={data["webhook_secret"]}\n')
             f.write(f'SOTA_AGENT_ID={data["agent_id"]}\n')
             f.write(f'SOTA_API_URL={api_url}\n')
+            if dev_cfg.get("supabase_url"):
+                f.write(f'SUPABASE_URL={dev_cfg["supabase_url"]}\n')
+            if dev_cfg.get("supabase_anon_key"):
+                f.write(f'SUPABASE_ANON_KEY={dev_cfg["supabase_anon_key"]}\n')
 
         click.echo(f"\n  Agent '{name}' registered! (sandbox mode)")
         click.echo(f"  Agent ID: {data['agent_id']}")
@@ -131,6 +147,44 @@ def _register_agent(name: str, dest: str):
     except httpx.RequestError as e:
         click.echo(f"Error: Could not connect to SOTA API at {api_url}: {e}", err=True)
         raise SystemExit(1)
+
+
+@main.command("config")
+@click.option("--write", "env_path", help="Append to this .env file instead of printing")
+def config(env_path: str | None):
+    """Print (or append to .env) the SDK config needed to connect to SOTA.
+
+    Fetches SOTA_API_URL, SUPABASE_URL, SUPABASE_ANON_KEY from the
+    backend's /api/v1/developer/config endpoint. Use after `sota-agent
+    init` when you need to fill in the Supabase values for an existing
+    project.
+    """
+    api_url = get_api_url()
+    try:
+        resp = httpx.get(f"{api_url}/api/v1/developer/config", timeout=10)
+    except httpx.RequestError as e:
+        click.echo(f"Error: Could not reach SOTA API at {api_url}: {e}", err=True)
+        raise SystemExit(1)
+    if resp.status_code != 200:
+        click.echo(f"Error: {resp.text}", err=True)
+        raise SystemExit(1)
+
+    cfg = resp.json()
+    lines = [
+        f'SOTA_API_URL={cfg["api_url"]}',
+        f'SUPABASE_URL={cfg["supabase_url"]}',
+        f'SUPABASE_ANON_KEY={cfg["supabase_anon_key"]}',
+    ]
+
+    if env_path:
+        # Append, don't clobber — caller might have SOTA_API_KEY etc.
+        with open(env_path, "a") as f:
+            f.write("\n# SOTA developer config\n")
+            f.write("\n".join(lines) + "\n")
+        click.echo(f"  Config appended to {env_path}")
+    else:
+        for line in lines:
+            click.echo(line)
 
 
 @main.command("request-review")
