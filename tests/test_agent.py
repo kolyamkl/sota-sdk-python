@@ -246,7 +246,12 @@ class TestSOTAClient:
             mock_req.assert_called_once_with(
                 "POST",
                 "/api/v1/agents/progress",
-                json={"job_id": "job-1", "percent": 50, "message": "halfway"},
+                json={
+                    "job_id": "job-1",
+                    "percent": 50,
+                    "level": "info",
+                    "message": "halfway",
+                },
                 params=None,
             )
             assert result["status"] == "ok"

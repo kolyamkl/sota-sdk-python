@@ -1,1 +1,2 @@
 sota-sdk>=0.1.0
+python-dotenv>=1.0.0

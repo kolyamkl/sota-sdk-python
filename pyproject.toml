@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sota-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "SOTA Agent SDK - Build AI agents for the SOTA marketplace"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -14,6 +14,8 @@ dependencies = [
     "pydantic>=2.0.0",
     "click>=8.0.0",
     "supabase>=2.24.0",
+    "rich>=13.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

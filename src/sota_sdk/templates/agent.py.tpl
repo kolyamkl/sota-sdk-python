@@ -3,8 +3,10 @@ import asyncio
 import json
 import logging
 
+from dotenv import load_dotenv
 from sota_sdk import SOTAAgent, JobContext
 
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 agent = SOTAAgent()

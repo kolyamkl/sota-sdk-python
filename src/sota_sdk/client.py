@@ -61,11 +61,17 @@ class SOTAClient:
     def __init__(self, api_key: str, base_url: str = "https://api.sota.app"):
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
+        self._jwt: str | None = None
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             headers={"X-API-Key": api_key},
             timeout=30.0,
         )
+
+    @property
+    def base_url(self) -> str:
+        """Base URL for the API (read-only)."""
+        return self._base_url
 
     async def _raise_for_status(self, resp: httpx.Response) -> None:
         """Raise APIError with structured detail from backend."""
@@ -84,15 +90,23 @@ class SOTAClient:
         path: str,
         json: dict | None = None,
         params: dict | None = None,
+        headers: dict | None = None,
         retries: int = 3,
     ) -> httpx.Response:
         """Make an HTTP request with exponential backoff retry on 5xx/network errors."""
         import asyncio
 
+        # Preserve pre-existing call signature (always pass json=, params=)
+        # and only add the optional headers kwarg when provided, to avoid
+        # breaking callers that pattern-match on httpx.AsyncClient.request.
+        req_kwargs: dict = {"json": json, "params": params}
+        if headers is not None:
+            req_kwargs["headers"] = headers
+
         last_error: Exception | None = None
         for attempt in range(retries + 1):
             try:
-                resp = await self._http.request(method, path, json=json, params=params)
+                resp = await self._http.request(method, path, **req_kwargs)
                 if resp.is_success or (resp.status_code < 500 and resp.status_code != 429):
                     return resp
                 last_error = APIError(resp.status_code, resp.text)
@@ -179,6 +193,21 @@ class SOTAClient:
         await self._raise_for_status(resp)
         return resp.json()
 
+    async def accept_job(self, job_id: str) -> dict:
+        """Acknowledge an award and advance the job to ``executing``.
+
+        The payment path is supposed to promote us out of ``assigned`` when
+        escrow funds on-chain. When funding is skipped or fails (devnet ATA
+        missing, no wallet, RPC outage), we can push the transition from
+        the agent side so the handler can run. Safe to call idempotently —
+        the backend rejects with 409 if we're already past ``assigned``.
+        """
+        resp = await self._request_with_retry(
+            "POST", f"/api/v1/agents/jobs/{job_id}/accept"
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
+
     async def deliver(
         self,
         job_id: str,
@@ -215,10 +244,22 @@ class SOTAClient:
         return resp.json()
 
     async def report_progress(
-        self, job_id: str, percent: int, message: str | None = None
+        self,
+        job_id: str,
+        percent: int,
+        message: str | None = None,
+        level: str = "info",
     ) -> dict:
-        """Report execution progress on a job (retries on transient failures)."""
-        body: dict = {"job_id": job_id, "percent": percent}
+        """Report execution progress on a job (retries on transient failures).
+
+        `level` must be one of 'info' | 'warn' | 'error'. Defaults to 'info'
+        for backward compatibility with existing handlers that don't pass it.
+        """
+        if level not in ("info", "warn", "error"):
+            raise ValueError(
+                f"level must be 'info' | 'warn' | 'error', got {level!r}"
+            )
+        body: dict = {"job_id": job_id, "percent": percent, "level": level}
         if message:
             body["message"] = message
         resp = await self._request_with_retry("POST", "/api/v1/agents/progress", json=body)
@@ -251,6 +292,183 @@ class SOTAClient:
             self._api_key = new_key
             self._http.headers["X-API-Key"] = new_key
         return data
+
+    def set_jwt(self, jwt: str | None) -> None:
+        """Attach a user JWT for Bearer-auth endpoints like GET /agents.
+
+        JWT-auth endpoints (list_agents, delete_agent,
+        register_agent_authenticated) check self._jwt; API-key endpoints
+        ignore it.
+        """
+        self._jwt = jwt
+
+    async def list_agents(
+        self,
+        status: str | None = None,
+        include_deleted: bool = False,
+    ) -> dict:
+        """GET /api/v1/agents — list agents owned by the JWT user."""
+        if not getattr(self, "_jwt", None):
+            raise APIError(401, "JWT not set; call set_jwt() first")
+        params: dict = {"include_deleted": include_deleted}
+        if status:
+            params["status"] = status
+        resp = await self._request_with_retry(
+            "GET",
+            f"{self._base_url}/api/v1/agents",
+            headers={"Authorization": f"Bearer {self._jwt}"},
+            params=params,
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
+
+    async def delete_agent(self, agent_id: str) -> dict:
+        """DELETE /api/v1/agents/{id} — soft-delete + revoke keys (JWT auth)."""
+        if not getattr(self, "_jwt", None):
+            raise APIError(401, "JWT not set; call set_jwt() first")
+        resp = await self._request_with_retry(
+            "DELETE",
+            f"{self._base_url}/api/v1/agents/{agent_id}",
+            headers={"Authorization": f"Bearer {self._jwt}"},
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
+
+    async def register_agent_authenticated(
+        self,
+        name: str,
+        capabilities: list[str],
+        wallet_address: str,
+        description: str | None = None,
+        webhook_url: str | None = None,
+        icon_url: str | None = None,
+    ) -> dict:
+        """POST /api/v1/agents/register (JWT-auth). Reuses logged-in user JWT
+        — no email/password re-entry (closes project_cli_register_auth_todo).
+        """
+        if not getattr(self, "_jwt", None):
+            raise APIError(401, "JWT not set; call set_jwt() first")
+        body: dict = {
+            "name": name,
+            "capabilities": capabilities,
+            "wallet_address": wallet_address,
+        }
+        if description is not None:
+            body["description"] = description
+        if webhook_url is not None:
+            body["webhook_url"] = webhook_url
+        if icon_url is not None:
+            body["icon_url"] = icon_url
+        resp = await self._request_with_retry(
+            "POST",
+            f"{self._base_url}/api/v1/agents/register",
+            headers={"Authorization": f"Bearer {self._jwt}"},
+            json=body,
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
+
+    async def list_bids(
+        self,
+        status: str | None = None,
+        since: str | None = None,
+    ) -> dict:
+        """GET /api/v1/agents/bids."""
+        params: dict = {}
+        if status:
+            params["status"] = status
+        if since:
+            params["since"] = since
+        kwargs: dict = {"params": params} if params else {}
+        resp = await self._request_with_retry(
+            "GET",
+            f"{self._base_url}/api/v1/agents/bids",
+            **kwargs,
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
+
+    async def list_keys(self, include_revoked: bool = False) -> dict:
+        """GET /api/v1/agents/keys. Never returns raw key hashes."""
+        resp = await self._request_with_retry(
+            "GET",
+            f"{self._base_url}/api/v1/agents/keys",
+            params={"include_revoked": include_revoked},
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
+
+    async def revoke_key(self, key_id: str) -> dict:
+        """POST /api/v1/agents/keys/{id}/revoke."""
+        resp = await self._request_with_retry(
+            "POST",
+            f"{self._base_url}/api/v1/agents/keys/{key_id}/revoke",
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
+
+    async def create_api_key(
+        self, agent_id: str, label: str | None = None,
+        expires_days: int = 365,
+    ) -> dict:
+        """POST /api/v1/agents/{id}/keys — create an additional API key (JWT-auth).
+
+        Returns the full response including the raw `api_key` string (shown once).
+        """
+        if not getattr(self, "_jwt", None):
+            raise APIError(401, "JWT not set; call set_jwt() first")
+        body: dict = {"expires_days": expires_days}
+        if label is not None:
+            body["label"] = label
+        resp = await self._request_with_retry(
+            "POST",
+            f"{self._base_url}/api/v1/agents/{agent_id}/keys",
+            headers={"Authorization": f"Bearer {self._jwt}"},
+            json=body,
+        )
+        return resp.json()
+
+    async def retry_test_job(self, test_job_id: str) -> dict:
+        """POST /api/v1/agents/test-jobs/{id}/retry."""
+        resp = await self._request_with_retry(
+            "POST",
+            f"{self._base_url}/api/v1/agents/test-jobs/{test_job_id}/retry",
+        )
+        return resp.json()
+
+    async def get_activity_log(
+        self,
+        since_id: int | None = None,
+        since_ts: str | None = None,
+        job_id: str | None = None,
+        limit: int = 200,
+    ) -> dict:
+        """GET /api/v1/agents/activity-log (Tier 1 logs poll endpoint).
+
+        Use ``since_id`` as the stable cursor between polls.
+        """
+        params: dict = {"limit": limit}
+        if since_id is not None:
+            params["since_id"] = since_id
+        if since_ts:
+            params["since_ts"] = since_ts
+        if job_id:
+            params["job_id"] = job_id
+        resp = await self._request_with_retry(
+            "GET",
+            f"{self._base_url}/api/v1/agents/activity-log",
+            params=params,
+        )
+        await self._raise_for_status(resp)
+        return resp.json()
+
+    async def get_reputation(self, agent_id: str) -> dict:
+        """GET /api/v1/agents/{id}/reputation."""
+        resp = await self._request_with_retry(
+            "GET",
+            f"{self._base_url}/api/v1/agents/{agent_id}/reputation",
+        )
+        return resp.json()
 
     async def close(self):
         """Close the underlying HTTP client."""

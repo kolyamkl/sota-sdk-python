@@ -473,9 +473,21 @@ class SOTAAgent:
         try:
             job = Job(**job_data) if isinstance(job_data, dict) else job_data
 
-            # Only execute if this agent is the assigned winner
+            # Only react to jobs where we're the declared winner.
             if job.winner_agent_id != self._agent_info.get("id"):
                 return
+
+            # On award push the transition to executing ourselves. Escrow
+            # may still fund in the background, but handler gating lives on
+            # ``executing`` and wallet-less / devnet-ATA-missing agents
+            # would otherwise stall indefinitely.
+            if job.status == "assigned":
+                try:
+                    await self._client.accept_job(job.id)
+                except Exception as accept_err:
+                    logger.error(f"Failed to accept job {job.id}: {accept_err}")
+                return
+
             if job.status != "executing":
                 return
 

@@ -12,6 +12,16 @@ from .auth import (
     save_credentials,
     get_api_url,
 )
+from .cli_commands.identity import logout, whoami, version
+from .cli_commands.agent import agent as agent_group
+from .cli_commands.runtime import status, watch, ping, run as run_cmd, logs
+from .cli_commands.jobs_bids import jobs, bids, bid_ops, job_show
+from .cli_commands.sandbox import sandbox, review
+from .cli_commands.keys import keys as keys_group
+from .cli_commands.reputation_diag import (
+    reputation, doctor, capabilities, onboard,
+)
+from .cli_commands.webhook import webhook
 
 
 @click.group()
@@ -70,12 +80,33 @@ def init(name: str, register: bool):
         click.echo("  python agent.py")
 
 
+import re
+
+# Base58 alphabet, 32–44 chars. Matches the shape of a Solana pubkey before
+# the server does the real base58-decode + 32-byte check via solders.Pubkey.
+_SOLANA_PUBKEY_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+
+
 def _register_agent(name: str, dest: str):
-    """Register agent via /register/simple after scaffolding."""
+    """Register agent after scaffolding.
+
+    If the user has already logged in (``~/.sota/credentials`` exists),
+    use the authenticated ``/register`` endpoint so one account can own
+    many agents. Otherwise fall back to ``/register/simple`` which
+    provisions the Supabase user in the same call.
+    """
     api_url = get_api_url()
 
-    email = click.prompt("  Email")
-    password = click.prompt("  Password", hide_input=True)
+    creds = load_credentials()
+    authed = creds is not None
+
+    if authed:
+        click.echo(f"  Using saved login: {creds.get('email')}")
+        email = ""
+        password = ""
+    else:
+        email = click.prompt("  Email")
+        password = click.prompt("  Password", hide_input=True)
 
     # Prompt for capabilities
     click.echo("  Available capabilities: web-scraping, data-extraction, code-review")
@@ -86,17 +117,59 @@ def _register_agent(name: str, dest: str):
         click.echo("Error: At least one capability required.", err=True)
         raise SystemExit(1)
 
+    description = click.prompt(
+        "  Description (one sentence, optional)", default="", show_default=False
+    ).strip() or None
+
+    while True:
+        wallet_address = click.prompt(
+            "  Solana wallet address (for payouts, required)"
+        ).strip()
+        if _SOLANA_PUBKEY_RE.match(wallet_address):
+            break
+        click.echo("  Not a valid Solana pubkey. Expected base58, 32–44 chars.", err=True)
+
+    min_fee_raw = click.prompt(
+        "  Minimum fee in USDC", default="1", show_default=True
+    ).strip()
+    try:
+        min_fee = float(min_fee_raw) if min_fee_raw else 1.0
+        if min_fee < 0:
+            raise ValueError
+    except ValueError:
+        click.echo("Error: min_fee must be a non-negative number.", err=True)
+        raise SystemExit(1)
+
     click.echo(f"\n  Registering '{name}' with SOTA marketplace...")
+
+    if authed:
+        endpoint = "/api/v1/agents/register"
+        headers = {"Authorization": f"Bearer {creds['access_token']}"}
+        payload = {
+            "name": name,
+            "capabilities": capabilities,
+            "description": description,
+            "wallet_address": wallet_address,
+            "min_fee": min_fee,
+        }
+    else:
+        endpoint = "/api/v1/agents/register/simple"
+        headers = {}
+        payload = {
+            "email": email,
+            "password": password,
+            "agent_name": name,
+            "capabilities": capabilities,
+            "description": description,
+            "wallet_address": wallet_address,
+            "min_fee": min_fee,
+        }
 
     try:
         resp = httpx.post(
-            f"{api_url}/api/v1/agents/register/simple",
-            json={
-                "email": email,
-                "password": password,
-                "agent_name": name,
-                "capabilities": capabilities,
-            },
+            f"{api_url}{endpoint}",
+            json=payload,
+            headers=headers,
             timeout=30,
         )
 
@@ -231,3 +304,41 @@ def request_review():
     except httpx.RequestError as e:
         click.echo(f"Error: Could not connect to SOTA API: {e}", err=True)
         raise SystemExit(1)
+
+
+# Identity group: logout, whoami, version
+main.add_command(logout)
+main.add_command(whoami)
+main.add_command(version)
+
+# Agent group: list, register, delete, show, set, switch, edit
+main.add_command(agent_group)
+
+# Runtime observability commands: status, watch, ping, run, logs
+main.add_command(status)
+main.add_command(watch)
+main.add_command(ping)
+main.add_command(run_cmd, name="run")
+main.add_command(logs)
+
+# Jobs + bids groups
+main.add_command(jobs)
+main.add_command(bids)
+main.add_command(bid_ops, name="bid")
+main.add_command(job_show, name="job")
+
+# Sandbox + review groups
+main.add_command(sandbox)
+main.add_command(review)
+
+# Keys group: list, rotate, create, revoke
+main.add_command(keys_group)
+
+# Reputation + diagnostics: reputation, doctor, capabilities, onboard
+main.add_command(reputation)
+main.add_command(doctor)
+main.add_command(capabilities)
+main.add_command(onboard)
+
+# Webhook helpers: verify + test
+main.add_command(webhook)

@@ -72,6 +72,9 @@ class JobContext:
         self.agent_id = agent_id
         self._client = _client
         self._delivered = False
+        # Tier 2 structured logger — piggybacks on report_progress.
+        from .logger import JobLogger
+        self.log = JobLogger(job_id=job.id, client=_client)
 
     async def update_progress(self, percent: int, message: str | None = None):
         """Report progress on the current job."""
@@ -117,6 +120,11 @@ class TestJobContext(JobContext):
         super().__init__(job=job, agent_id=agent_id, _client=_client)
         self._test_job_id = test_job_id
         self.last_validation: dict | None = None
+        # Override the live logger with a no-op so handler code using
+        # `ctx.log.info(...)` runs safely during sandbox tests (consistent
+        # with update_progress being a no-op here too).
+        from .logger import _NoopJobLogger
+        self.log = _NoopJobLogger()
 
     async def update_progress(self, percent: int, message: str | None = None):
         # Progress is not tracked for sandbox tests — accept the call

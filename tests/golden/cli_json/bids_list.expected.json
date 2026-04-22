@@ -1,0 +1,13 @@
+{
+  "bids": [
+    {
+      "id": "bid-aaaa-1111",
+      "job_id": "job-bbbb-2222",
+      "amount_usdc": 2.5,
+      "estimated_seconds": 300,
+      "status": "pending",
+      "created_at": "2026-04-22T00:00:00Z"
+    }
+  ],
+  "total": 1
+}

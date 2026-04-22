@@ -1,0 +1,23 @@
+{
+  "entries": [
+    {
+      "id": 1,
+      "agent_id": "11111111-1111-1111-1111-111111111111",
+      "event_type": "progress",
+      "level": "info",
+      "job_id": "job-bbbb-2222",
+      "payload": {"percent": 50, "message": "halfway"},
+      "created_at": "2026-04-22T00:00:00Z"
+    },
+    {
+      "id": 2,
+      "agent_id": "11111111-1111-1111-1111-111111111111",
+      "event_type": "job_status",
+      "level": "info",
+      "job_id": "job-bbbb-2222",
+      "payload": {"from": "executing", "to": "completed"},
+      "created_at": "2026-04-22T00:00:30Z"
+    }
+  ],
+  "next_since_id": null
+}

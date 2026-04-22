@@ -10,7 +10,9 @@ import httpx
 
 CREDENTIALS_DIR = os.path.expanduser("~/.sota")
 CREDENTIALS_FILE = os.path.join(CREDENTIALS_DIR, "credentials")
-DEFAULT_API_URL = os.environ.get("SOTA_API_URL", "http://localhost:8000")
+DEFAULT_API_URL = os.environ.get(
+    "SOTA_API_URL", "https://sota-backend-production.up.railway.app",
+)
 
 
 def save_credentials(data: dict) -> None:
